@@ -1,8 +1,13 @@
+/**
+ * Instapaper API v2 client (OAuth 2 bearer token).
+ *
+ * Get a personal access token on your application's page at
+ * https://www.instapaper.com/developers/applications. Responses are mapped
+ * back to the v1-style shapes (bookmark_id, starred, folder_id, highlight_id)
+ * that the MCP tools in index.ts expect.
+ */
 interface InstapaperCredentials {
-    consumerKey: string;
-    consumerSecret: string;
-    username: string;
-    password: string;
+    accessToken: string;
 }
 interface Bookmark {
     bookmark_id: number;
@@ -11,8 +16,10 @@ interface Bookmark {
     description: string;
     time: number;
     starred: string;
-    folder?: string;
-    hash: string;
+    archived: boolean;
+    folder_id: number | null;
+    tags: string[];
+    author: string | null;
     progress: number;
     progress_timestamp: number;
     private_source?: string;
@@ -21,24 +28,22 @@ interface Folder {
     folder_id: number;
     title: string;
     position: number;
+    count: number;
 }
 interface Highlight {
     highlight_id: number;
+    bookmark_id: number;
     text: string;
+    note: string | null;
     position: number;
     time: number;
 }
 export declare class InstapaperClient {
-    private consumerKey;
-    private consumerSecret;
-    private username;
-    private password;
-    private oauthToken?;
-    private oauthTokenSecret?;
+    private accessToken;
     private baseUrl;
     constructor(credentials: InstapaperCredentials);
     /**
-     * Authenticate with Instapaper using xAuth to get OAuth tokens
+     * Check the access token by fetching the connected account
      */
     authenticate(): Promise<void>;
     /**
@@ -46,7 +51,8 @@ export declare class InstapaperClient {
      */
     verifyCredentials(): Promise<boolean>;
     /**
-     * List bookmarks with optional filters
+     * List bookmarks with optional filters.
+     * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
      */
     listBookmarks(options?: {
         folder?: string;
@@ -54,7 +60,7 @@ export declare class InstapaperClient {
         have?: string;
     }): Promise<Bookmark[]>;
     /**
-     * Get full text of an article
+     * Get the parsed article HTML
      */
     getArticleText(bookmarkId: number): Promise<string>;
     /**
@@ -68,16 +74,17 @@ export declare class InstapaperClient {
         resolve_final_url?: boolean;
         content?: string;
         is_private_from_source?: string;
-    }): Promise<Bookmark>; /**
+    }): Promise<Bookmark>;
+    /**
      * Delete a bookmark
      */
     deleteBookmark(bookmarkId: number): Promise<void>;
     /**
-     * Star a bookmark
+     * Star (like) a bookmark
      */
     starBookmark(bookmarkId: number): Promise<Bookmark>;
     /**
-     * Unstar a bookmark
+     * Unstar (unlike) a bookmark
      */
     unstarBookmark(bookmarkId: number): Promise<Bookmark>;
     /**
@@ -137,18 +144,11 @@ export declare class InstapaperClient {
      * Delete a highlight
      */
     deleteHighlight(highlightId: number): Promise<void>;
+    private moveToSection;
     /**
-     * Make an authenticated request to Instapaper API
+     * Make an authenticated request to the Instapaper API
      */
-    private makeAuthenticatedRequest;
-    /**
-     * Generate OAuth 1.0a signature and parameters
-     */
-    private generateOAuthParams;
-    /**
-     * Percent encode for OAuth
-     */
-    private percentEncode;
+    private request;
 }
 export {};
 //# sourceMappingURL=instapaper-client.d.ts.map

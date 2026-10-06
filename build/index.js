@@ -7,23 +7,14 @@ import * as dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 // Validate required environment variables
-const requiredEnvVars = [
-    'INSTAPAPER_CONSUMER_KEY',
-    'INSTAPAPER_CONSUMER_SECRET',
-    'INSTAPAPER_USERNAME',
-    'INSTAPAPER_PASSWORD',
-];
-for (const envVar of requiredEnvVars) {
-    if (!process.env[envVar]) {
-        throw new Error(`Missing required environment variable: ${envVar}`);
-    }
+// INSTAPAPER_ACCESS_TOKEN: personal access token from your application's page
+// at https://www.instapaper.com/developers/applications
+if (!process.env.INSTAPAPER_ACCESS_TOKEN) {
+    throw new Error('Missing required environment variable: INSTAPAPER_ACCESS_TOKEN');
 }
 // Initialize Instapaper client
 const client = new InstapaperClient({
-    consumerKey: process.env.INSTAPAPER_CONSUMER_KEY,
-    consumerSecret: process.env.INSTAPAPER_CONSUMER_SECRET,
-    username: process.env.INSTAPAPER_USERNAME,
-    password: process.env.INSTAPAPER_PASSWORD,
+    accessToken: process.env.INSTAPAPER_ACCESS_TOKEN,
 });
 // Create MCP server
 const server = new Server({
