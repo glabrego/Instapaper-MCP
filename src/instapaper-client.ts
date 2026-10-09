@@ -36,6 +36,17 @@ interface Folder {
   count: number;
 }
 
+interface Article {
+  bookmark_id: number;
+  title: string | null;
+  author: string | null;
+  published: string | null; // YYYY-MM-DD
+  description: string | null;
+  words: number | null;
+  paywalled: boolean;
+  text: string;
+}
+
 interface Tag {
   tag_id: number;
   name: string;
@@ -79,19 +90,32 @@ export class InstapaperClient {
   }
 
   /**
-   * List bookmarks with optional filters.
+   * List bookmarks with optional filters (first page only)
+   */
+  async listBookmarks(options: { folder?: string; tag?: string; limit?: number } = {}): Promise<Bookmark[]> {
+    return (await this.listBookmarksPage(options)).bookmarks;
+  }
+
+  /**
+   * List one page of bookmarks.
    * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
    * tag: a tag name; takes precedence over folder
+   * since: Unix timestamp; returns everything changed since then across all
+   *   sections (folder/tag are ignored) plus deleted_ids
+   * total is the size of the whole section (in since mode: changed + deleted)
    */
-  async listBookmarks(options: {
+  async listBookmarksPage(options: {
     folder?: string;
     tag?: string;
     limit?: number;
-    have?: string;
-  } = {}): Promise<Bookmark[]> {
+    offset?: number;
+    since?: number;
+  } = {}): Promise<{ bookmarks: Bookmark[]; total: number; deleted_ids?: number[] }> {
     const query: Record<string, string> = {};
     const folder = options.folder;
-    if (options.tag) {
+    if (options.since) {
+      query.since = Math.max(1, Math.floor(options.since)).toString();
+    } else if (options.tag) {
       query.section = 'tag';
       query.tag = options.tag;
     } else if (!folder || folder === 'unread' || folder === 'home') {
@@ -105,17 +129,60 @@ export class InstapaperClient {
       query.folder_id = folder;
     }
     query.limit = Math.min(Math.max(options.limit ?? 25, 1), 500).toString();
+    if (options.offset) query.offset = Math.max(0, Math.floor(options.offset)).toString();
 
     const response = await this.request('GET', '/bookmarks', undefined, query);
-    return response.bookmarks.map(toBookmark);
+    const page: { bookmarks: Bookmark[]; total: number; deleted_ids?: number[] } = {
+      bookmarks: response.bookmarks.map(toBookmark),
+      total: response.total,
+    };
+    if (response.deleted_ids) page.deleted_ids = response.deleted_ids;
+    return page;
   }
 
   /**
-   * Get the parsed article HTML
+   * Fetch every bookmark in the account (all sections), paging through sync mode
+   */
+  async listAllBookmarks(): Promise<Bookmark[]> {
+    const all = new Map<number, Bookmark>();
+    const deleted = new Set<number>();
+    const limit = 500;
+    let offset = 0;
+    for (;;) {
+      const page = await this.listBookmarksPage({ since: 1, limit, offset });
+      for (const b of page.bookmarks) all.set(b.bookmark_id, b);
+      for (const id of page.deleted_ids ?? []) deleted.add(id);
+      const received = page.bookmarks.length + (page.deleted_ids?.length ?? 0);
+      offset += received;
+      if (received < limit) break;
+    }
+    return [...all.values()].filter((b) => !deleted.has(b.bookmark_id));
+  }
+
+  /**
+   * Get the parsed article as plain text, with its metadata
+   */
+  async getArticle(bookmarkId: number): Promise<Article> {
+    const response = await this.request('GET', `/bookmarks/${bookmarkId}/parse`);
+    const metadata = response.metadata ?? {};
+    const content = response.content ?? {};
+    return {
+      bookmark_id: bookmarkId,
+      title: metadata.title ?? null,
+      author: metadata.author?.name ?? null,
+      published: metadata.pubtime ? new Date(metadata.pubtime * 1000).toISOString().slice(0, 10) : null,
+      description: metadata.description ?? null,
+      words: content.words ?? null,
+      paywalled: content.paywalled ?? false,
+      text: htmlToText(content.body ?? ''),
+    };
+  }
+
+  /**
+   * Get the parsed article as plain text
    */
   async getArticleText(bookmarkId: number): Promise<string> {
-    const response = await this.request('GET', `/bookmarks/${bookmarkId}/parse`);
-    return response.content?.body ?? '';
+    return (await this.getArticle(bookmarkId)).text;
   }
 
   /**
@@ -406,6 +473,33 @@ function toFolder(f: any): Folder {
     position: f.position,
     count: f.count,
   };
+}
+
+const ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  mdash: '—', ndash: '–', hellip: '…', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+};
+
+/**
+ * Convert the parser's article HTML to readable plain text:
+ * paragraphs and headings become blank-line separated blocks, list items get "- ".
+ */
+function htmlToText(html: string): string {
+  return html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n- ')
+    .replace(/<\/(p|div|h[1-6]|blockquote|pre|ul|ol|table|tr|figure|section|article)>/gi, '\n\n')
+    .replace(/<(p|div|h[1-6]|blockquote|pre|ul|ol|table|tr|figure|section|article)[^>]*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&([a-z]+);/gi, (m, name) => ENTITIES[name.toLowerCase()] ?? m)
+    .split('\n')
+    .map((line) => line.replace(/[ \t ]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function toTag(t: any): Tag {

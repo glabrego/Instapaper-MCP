@@ -53,7 +53,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // ========== DISCOVERY & READING (Most Frequently Used) ==========
       {
         name: 'list_bookmarks',
-        description: 'List bookmarks from a specific folder or search results. Retrieve unread, archived, or starred articles with optional limit. This is the primary way to browse your reading list. Supports filtering by folder, limit, and sync parameters for efficient bulk data retrieval.',
+        description: 'List bookmarks from a section (unread, archive, starred, a folder) or a tag, newest first. Returns one page plus the section\'s real total and next_offset; call again with offset to page through. With since, returns everything changed since that time across all sections, plus deleted_ids, for syncing. To find articles by topic or keyword across the whole account, use search_bookmarks instead.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -71,9 +71,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               minimum: 1,
               maximum: 500,
             },
-            have: {
-              type: 'string',
-              description: 'Optional: comma-separated bookmark IDs you already have for sync optimization',
+            offset: {
+              type: 'number',
+              description: 'Number of bookmarks to skip, for paging (default 0). Use next_offset from the previous call.',
+              minimum: 0,
+            },
+            since: {
+              type: 'number',
+              description: 'Optional Unix timestamp: return everything changed since then, across all sections (folder and tag are ignored), plus deleted_ids',
+              minimum: 1,
             },
           },
           required: [],
@@ -81,17 +87,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'search_bookmarks',
-        description: 'Find bookmarks by searching through titles, URLs, and descriptions. Supports optional filtering by folder (use "unread", "archive", "starred", or a specific folder_id) and result limits. Useful for discovering articles on specific topics or finding previously saved content.',
+        description: 'Search the whole account (unread, archive, liked and every folder) by keyword. Matches bookmarks whose title, URL, description, author or tags contain every word of the query (case-insensitive), newest first. Optionally narrow to a folder or a tag. Returns total_matches plus up to limit results. Searches saved metadata, not the full article text.',
         inputSchema: {
           type: 'object',
           properties: {
             query: {
               type: 'string',
-              description: 'Search query',
+              description: 'Search words; all must match',
             },
             folder: {
               type: 'string',
-              description: 'Optional folder to search in (unread, archive, starred, or folder_id)',
+              description: 'Optional: only search "unread", "archive", "starred", or a folder_id',
+            },
+            tag: {
+              type: 'string',
+              description: 'Optional: only search bookmarks carrying this tag name',
             },
             limit: {
               type: 'number',
@@ -104,7 +114,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_article_content',
-        description: 'Retrieve the complete text content of a single article. Use this to analyze, summarize, or process the full article text. Requires a bookmark ID. Returns the article as plain text.',
+        description: 'Retrieve the complete text of a single article, as clean plain text, with its metadata (title, author, publication date, word count, whether it looks paywalled). Use this to analyze, summarize, or process the full article. Requires a bookmark ID.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -118,7 +128,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'get_articles_content_bulk',
-        description: 'Fetch the complete text of multiple articles simultaneously for efficient bulk analysis. Provide an array of bookmark IDs. Articles are retrieved in parallel for best performance. Each article is returned with its ID, content, or error status. Ideal for synthesizing information across multiple sources, comparing perspectives, or comprehensive research analysis.',
+        description: 'Fetch the complete text of multiple articles simultaneously for efficient bulk analysis. Provide an array of bookmark IDs. Articles are retrieved in parallel for best performance. Each article is returned as plain text with its metadata (title, author, publication date, word count), or with an error. Ideal for synthesizing information across multiple sources, comparing perspectives, or comprehensive research analysis.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -633,20 +643,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     switch (name) {
       case 'list_bookmarks': {
-        const bookmarks = await client.listBookmarks({
+        const offset = (typedArgs.offset as number) || 0;
+        const page = await client.listBookmarksPage({
           folder: typedArgs.folder as string | undefined,
           tag: typedArgs.tag as string | undefined,
           limit: (typedArgs.limit as number) || 25,
-          have: typedArgs.have as string | undefined,
+          offset,
+          since: typedArgs.since as number | undefined,
         });
+        const received = page.bookmarks.length + (page.deleted_ids?.length ?? 0);
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify(
                 {
-                  total: bookmarks.length,
-                  bookmarks,
+                  total: page.total,
+                  returned: page.bookmarks.length,
+                  offset,
+                  next_offset: offset + received < page.total ? offset + received : null,
+                  ...(page.deleted_ids ? { deleted_ids: page.deleted_ids } : {}),
+                  bookmarks: page.bookmarks,
                 },
                 null,
                 2
@@ -1191,19 +1208,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'search_bookmarks': {
-        const bookmarks = await client.listBookmarks({
-          folder: typedArgs.folder as string | undefined,
-          limit: (typedArgs.limit as number) || 25,
-        });
+        // The API has no search endpoint, so scan the whole account client-side
+        const words = (typedArgs.query as string).toLowerCase().split(/\s+/).filter(Boolean);
+        const folder = typedArgs.folder as string | undefined;
+        const tag = (typedArgs.tag as string | undefined)?.trim().toLowerCase();
+        const limit = (typedArgs.limit as number) || 25;
 
-        // Simple client-side search (Instapaper API doesn't have built-in search)
-        const query = (typedArgs.query as string).toLowerCase();
-        const filtered = bookmarks.filter(
-          (b) =>
-            b.title.toLowerCase().includes(query) ||
-            b.url.toLowerCase().includes(query) ||
-            (b.description && b.description.toLowerCase().includes(query))
-        );
+        const inFolder = (b: { archived: boolean; starred: string; folder_id: number | null }) => {
+          if (!folder) return true;
+          if (folder === 'unread' || folder === 'home') return !b.archived && b.folder_id === null;
+          if (folder === 'archive') return b.archived;
+          if (folder === 'starred' || folder === 'liked') return b.starred === '1';
+          return b.folder_id === Number(folder);
+        };
+
+        const matches = (await client.listAllBookmarks())
+          .filter(inFolder)
+          .filter((b) => !tag || b.tags.some((t) => t.trim().toLowerCase() === tag))
+          .filter((b) => {
+            const haystack = [b.title, b.url, b.description, b.author ?? '', ...b.tags].join(' ').toLowerCase();
+            return words.every((w) => haystack.includes(w));
+          })
+          .sort((a, b) => b.time - a.time);
 
         return {
           content: [
@@ -1212,8 +1238,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify(
                 {
                   query: typedArgs.query,
-                  results: filtered.length,
-                  bookmarks: filtered,
+                  total_matches: matches.length,
+                  returned: Math.min(matches.length, limit),
+                  bookmarks: matches.slice(0, limit),
                 },
                 null,
                 2
@@ -1224,12 +1251,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_article_content': {
-        const content = await client.getArticleText(typedArgs.bookmark_id as number);
+        const { text, ...metadata } = await client.getArticle(typedArgs.bookmark_id as number);
         return {
           content: [
             {
               type: 'text',
-              text: content,
+              text: `${JSON.stringify(metadata, null, 2)}\n\n${text}`,
             },
           ],
         };
@@ -1237,13 +1264,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'get_articles_content_bulk': {
         const bookmarkIds = typedArgs.bookmark_ids as number[];
-        const results: Record<number, { content: string } | { error: string }> = {};
+        const results: Record<number, { text: string } | { error: string }> = {};
 
         // Fetch articles in parallel for better performance
         const promises = bookmarkIds.map(async (id) => {
           try {
-            const content = await client.getArticleText(id);
-            results[id] = { content };
+            results[id] = await client.getArticle(id);
           } catch (error) {
             results[id] = {
               error: error instanceof Error ? error.message : 'Unknown error',
@@ -1260,7 +1286,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify(
                 {
                   total: bookmarkIds.length,
-                  fetched: Object.values(results).filter((r) => 'content' in r).length,
+                  fetched: Object.values(results).filter((r) => 'text' in r).length,
                   failed: Object.values(results).filter((r) => 'error' in r).length,
                   articles: results,
                 },

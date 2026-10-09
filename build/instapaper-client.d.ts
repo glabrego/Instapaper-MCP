@@ -30,6 +30,16 @@ interface Folder {
     position: number;
     count: number;
 }
+interface Article {
+    bookmark_id: number;
+    title: string | null;
+    author: string | null;
+    published: string | null;
+    description: string | null;
+    words: number | null;
+    paywalled: boolean;
+    text: string;
+}
 interface Tag {
     tag_id: number;
     name: string;
@@ -56,18 +66,42 @@ export declare class InstapaperClient {
      */
     verifyCredentials(): Promise<boolean>;
     /**
-     * List bookmarks with optional filters.
-     * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
-     * tag: a tag name; takes precedence over folder
+     * List bookmarks with optional filters (first page only)
      */
     listBookmarks(options?: {
         folder?: string;
         tag?: string;
         limit?: number;
-        have?: string;
     }): Promise<Bookmark[]>;
     /**
-     * Get the parsed article HTML
+     * List one page of bookmarks.
+     * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
+     * tag: a tag name; takes precedence over folder
+     * since: Unix timestamp; returns everything changed since then across all
+     *   sections (folder/tag are ignored) plus deleted_ids
+     * total is the size of the whole section (in since mode: changed + deleted)
+     */
+    listBookmarksPage(options?: {
+        folder?: string;
+        tag?: string;
+        limit?: number;
+        offset?: number;
+        since?: number;
+    }): Promise<{
+        bookmarks: Bookmark[];
+        total: number;
+        deleted_ids?: number[];
+    }>;
+    /**
+     * Fetch every bookmark in the account (all sections), paging through sync mode
+     */
+    listAllBookmarks(): Promise<Bookmark[]>;
+    /**
+     * Get the parsed article as plain text, with its metadata
+     */
+    getArticle(bookmarkId: number): Promise<Article>;
+    /**
+     * Get the parsed article as plain text
      */
     getArticleText(bookmarkId: number): Promise<string>;
     /**
