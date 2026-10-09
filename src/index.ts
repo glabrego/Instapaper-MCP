@@ -12,9 +12,12 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { InstapaperClient } from './instapaper-client.js';
 import * as dotenv from 'dotenv';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from the project's .env, whatever directory the
+// MCP client launches the server from (variables already set take precedence)
+dotenv.config({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../.env') });
 
 // Validate required environment variables
 // INSTAPAPER_ACCESS_TOKEN: personal access token from your application's page
@@ -562,7 +565,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // ========== HIGHLIGHTS MANAGEMENT ==========
       {
         name: 'add_highlight',
-        description: 'Add a highlight (excerpt) to an article. Specify the text to highlight and its position in the article. Use this to mark important passages, quotes, or key insights for later reference.',
+        description: 'Add a highlight (excerpt) to an article, optionally with a note. The text must appear verbatim in the article (copy it from get_article_content). Use this to mark important passages, quotes, or key insights for later reference. Accounts without Instapaper Premium are limited to 5 highlights per month.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -572,14 +575,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             text: {
               type: 'string',
-              description: 'Text to highlight',
+              description: 'Exact passage to highlight, as it appears in the article',
             },
             position: {
               type: 'number',
-              description: 'Position in the article (character offset)',
+              description: 'Which occurrence of the text to highlight, counting from 0 (default 0, the first). Only needed when the same text appears more than once.',
+              minimum: 0,
+            },
+            note: {
+              type: 'string',
+              description: 'Optional note to attach to the highlight',
             },
           },
-          required: ['bookmark_id', 'text', 'position'],
+          required: ['bookmark_id', 'text'],
         },
       },
       {
@@ -1171,7 +1179,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const highlight = await client.addHighlight(
           typedArgs.bookmark_id as number,
           typedArgs.text as string,
-          typedArgs.position as number
+          (typedArgs.position as number | undefined) ?? 0,
+          typedArgs.note as string | undefined
         );
         return {
           content: [

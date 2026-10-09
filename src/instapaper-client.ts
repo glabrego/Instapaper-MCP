@@ -9,6 +9,12 @@ import fetch from 'node-fetch';
  * that the MCP tools in index.ts expect.
  */
 
+const MAX_CONCURRENT_REQUESTS = 4;
+const MAX_RETRIES = 4;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const backoffMs = (attempt: number) => 1000 * 2 ** attempt; // 1s, 2s, 4s, 8s
+
 interface InstapaperCredentials {
   accessToken: string;
 }
@@ -337,9 +343,12 @@ export class InstapaperClient {
   async addHighlight(
     bookmarkId: number,
     text: string,
-    position: number
+    position = 0, // which occurrence of text in the article, counting from 0
+    note?: string
   ): Promise<Highlight> {
-    const response = await this.request('POST', `/bookmarks/${bookmarkId}/highlights`, { text, position });
+    const body: Record<string, unknown> = { text, position };
+    if (note) body.note = note;
+    const response = await this.request('POST', `/bookmarks/${bookmarkId}/highlights`, body);
     return toHighlight(response);
   }
 
@@ -408,6 +417,24 @@ export class InstapaperClient {
     return toBookmark(await this.request('POST', `/bookmarks/${bookmarkId}/move`, { section }));
   }
 
+  private activeRequests = 0;
+  private waiting: Array<() => void> = [];
+
+  private async acquireSlot(): Promise<void> {
+    if (this.activeRequests < MAX_CONCURRENT_REQUESTS) {
+      this.activeRequests++;
+      return;
+    }
+    // releaseSlot hands its slot straight to the next waiter
+    await new Promise<void>((resolve) => this.waiting.push(resolve));
+  }
+
+  private releaseSlot(): void {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.activeRequests--;
+  }
+
   /**
    * Make an authenticated request to the Instapaper API
    */
@@ -427,11 +454,34 @@ export class InstapaperClient {
     };
     if (body) headers['Content-Type'] = 'application/json';
 
-    const response = await fetch(url.toString(), {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    // Bulk tools fire many calls at once: cap concurrency and back off on rate limits.
+    // 429s are retried for any method (the request was not processed); 5xx and
+    // network errors only for GET, so writes are never applied twice.
+    let response: Awaited<ReturnType<typeof fetch>> | undefined;
+    for (let attempt = 0; ; attempt++) {
+      const canRetry = attempt < MAX_RETRIES;
+      await this.acquireSlot();
+      try {
+        response = await fetch(url.toString(), {
+          method,
+          headers,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+      } catch (error) {
+        if (method === 'GET' && canRetry) {
+          await sleep(backoffMs(attempt));
+          continue;
+        }
+        throw error;
+      } finally {
+        this.releaseSlot();
+      }
+
+      const retryable = response.status === 429 || (method === 'GET' && response.status >= 500);
+      if (!retryable || !canRetry) break;
+      const retryAfter = Number(response.headers.get('retry-after'));
+      await sleep(retryAfter > 0 ? retryAfter * 1000 : backoffMs(attempt));
+    }
 
     const text = await response.text();
     if (!response.ok) {

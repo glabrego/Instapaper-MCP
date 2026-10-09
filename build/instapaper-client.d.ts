@@ -1,11 +1,3 @@
-/**
- * Instapaper API v2 client (OAuth 2 bearer token).
- *
- * Get a personal access token on your application's page at
- * https://www.instapaper.com/developers/applications. Responses are mapped
- * back to the v1-style shapes (bookmark_id, starred, folder_id, highlight_id)
- * that the MCP tools in index.ts expect.
- */
 interface InstapaperCredentials {
     accessToken: string;
 }
@@ -180,7 +172,8 @@ export declare class InstapaperClient {
     /**
      * Add a highlight
      */
-    addHighlight(bookmarkId: number, text: string, position: number): Promise<Highlight>;
+    addHighlight(bookmarkId: number, text: string, position?: number, // which occurrence of text in the article, counting from 0
+    note?: string): Promise<Highlight>;
     /**
      * Delete a highlight
      */
@@ -210,6 +203,10 @@ export declare class InstapaperClient {
         tags: string[];
     }>;
     private moveToSection;
+    private activeRequests;
+    private waiting;
+    private acquireSlot;
+    private releaseSlot;
     /**
      * Make an authenticated request to the Instapaper API
      */
