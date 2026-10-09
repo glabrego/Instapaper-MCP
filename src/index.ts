@@ -164,7 +164,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       // ========== QUICK ACTIONS (Frequently Used) ==========
       {
         name: 'add_bookmark',
-        description: 'Save an article or web page to Instapaper. Use this when the user wants to save a URL for later reading. Returns the bookmark ID, title, and URL. You can optionally provide a title, description/notes, and a folder ID to organize the article.',
+        description: 'Save an article or web page to Instapaper. Use this when the user wants to save a URL for later reading. Optionally set a title, description/notes, folder, tags, or save it straight to the archive. Saving a URL that is already saved does not create a duplicate: the existing bookmark is updated with what you send and moved back to the top. Returns the bookmark ID, title, URL and tags.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -174,7 +174,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             title: {
               type: 'string',
-              description: 'Optional title for the bookmark',
+              description: 'Optional title for the bookmark. If omitted, Instapaper looks it up, which makes the call slower.',
             },
             description: {
               type: 'string',
@@ -183,6 +183,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             folder_id: {
               type: 'number',
               description: 'Optional folder ID to save the bookmark in',
+            },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional tag names to apply; tags that do not exist yet are created',
+            },
+            archived: {
+              type: 'boolean',
+              description: 'Save straight to the archive instead of the unread list (default false)',
+            },
+            resolve_final_url: {
+              type: 'boolean',
+              description: 'Follow redirects and canonicalize the URL before saving (default true). Set false to save the URL exactly as given.',
             },
           },
           required: ['url'],
@@ -627,6 +640,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: 'update_bookmark',
+        description: 'Edit the title and/or description of a saved bookmark, e.g. to fix a bad title or add notes. To change tags use tag_bookmark; to change reading progress use update_read_progress.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            bookmark_id: {
+              type: 'number',
+              description: 'ID of the bookmark',
+            },
+            title: {
+              type: 'string',
+              description: 'New title',
+            },
+            description: {
+              type: 'string',
+              description: 'New description or notes',
+            },
+          },
+          required: ['bookmark_id'],
+        },
+      },
+      {
         name: 'delete_bookmark',
         description: 'Permanently remove a bookmark from Instapaper. This action cannot be undone. Use this when the user wants to delete an article they no longer need.',
         inputSchema: {
@@ -686,6 +721,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           title: typedArgs.title as string | undefined,
           description: typedArgs.description as string | undefined,
           folder_id: typedArgs.folder_id as number | undefined,
+          tags: typedArgs.tags as string[] | undefined,
+          archived: typedArgs.archived as boolean | undefined,
+          resolve_final_url: typedArgs.resolve_final_url as boolean | undefined,
         });
         return {
           content: [
@@ -696,6 +734,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 bookmark_id: bookmark.bookmark_id,
                 title: bookmark.title,
                 url: bookmark.url,
+                tags: bookmark.tags,
+                archived: bookmark.archived,
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'update_bookmark': {
+        const bookmark = await client.updateBookmark(typedArgs.bookmark_id as number, {
+          title: typedArgs.title as string | undefined,
+          description: typedArgs.description as string | undefined,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                bookmark_id: bookmark.bookmark_id,
+                title: bookmark.title,
+                description: bookmark.description,
               }, null, 2),
             },
           ],

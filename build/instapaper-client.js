@@ -153,7 +153,25 @@ export class InstapaperClient {
             body.description = options.description;
         if (options.folder_id)
             body.folder_id = options.folder_id;
+        if (options.tags?.length)
+            body.tags = options.tags.map((name) => ({ name }));
+        if (options.archived)
+            body.archived = true;
         return toBookmark(await this.request('POST', '/bookmarks', body));
+    }
+    /**
+     * Edit a bookmark's title and/or description
+     */
+    async updateBookmark(bookmarkId, changes) {
+        const body = {};
+        if (changes.title !== undefined)
+            body.title = changes.title;
+        if (changes.description !== undefined)
+            body.description = changes.description;
+        if (!Object.keys(body).length) {
+            throw new Error('Nothing to change: provide title and/or description');
+        }
+        return toBookmark(await this.request('POST', `/bookmarks/${bookmarkId}`, body));
     }
     /**
      * Delete a bookmark

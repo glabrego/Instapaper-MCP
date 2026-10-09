@@ -10,7 +10,8 @@ Buy me a coffee: https://cmdzed.com/#/portal/support
 ### 🛠️ Tools (Actions)
 
 **Content Management:**
-- `add_bookmark` - Save articles with title, description, and folder
+- `add_bookmark` - Save articles with title, description, folder and tags, optionally straight to the archive or without resolving redirects
+- `update_bookmark` - Edit an article's title and/or description
 - `add_private_bookmark` - Save private content without URLs (emails, notes, generated content)
 - `delete_bookmark` - Remove articles
 - `archive_bookmark` - Move articles to archive
@@ -421,6 +422,8 @@ Contributions welcome! Please feel free to submit issues or pull requests.
 - `list_bookmarks`: real section total, `offset`/`next_offset` paging, `since` sync with deleted IDs (the v1-only `have` parameter is gone)
 - `search_bookmarks`: searches the whole account (title, URL, description, author, tags), all words must match, optional folder/tag filter
 - `get_article_content` and `get_articles_content_bulk`: clean plain text plus title, author, publication date, word count and paywall flag
+- New `update_bookmark` tool to edit an article's title and description
+- `add_bookmark`: new `tags`, `archived` and `resolve_final_url` options
 - `add_highlight`: `position` is now the optional occurrence index (it was wrongly documented as a character offset); new `note` parameter
 - API requests are capped at 4 concurrent, with automatic retry on rate limits
 - `.env` is loaded from the project directory regardless of the launch directory

@@ -200,6 +200,8 @@ export class InstapaperClient {
     description?: string;
     folder_id?: number;
     resolve_final_url?: boolean;
+    tags?: string[]; // tag names; missing ones are created
+    archived?: boolean; // save straight to the archive
     content?: string; // Required for private sources
     is_private_from_source?: string; // Set to source label (e.g., 'email', 'notebook') for private bookmarks
   } = {}): Promise<Bookmark> {
@@ -219,8 +221,26 @@ export class InstapaperClient {
     if (options.title) body.title = options.title;
     if (options.description) body.description = options.description;
     if (options.folder_id) body.folder_id = options.folder_id;
+    if (options.tags?.length) body.tags = options.tags.map((name) => ({ name }));
+    if (options.archived) body.archived = true;
 
     return toBookmark(await this.request('POST', '/bookmarks', body));
+  }
+
+  /**
+   * Edit a bookmark's title and/or description
+   */
+  async updateBookmark(
+    bookmarkId: number,
+    changes: { title?: string; description?: string }
+  ): Promise<Bookmark> {
+    const body: Record<string, unknown> = {};
+    if (changes.title !== undefined) body.title = changes.title;
+    if (changes.description !== undefined) body.description = changes.description;
+    if (!Object.keys(body).length) {
+      throw new Error('Nothing to change: provide title and/or description');
+    }
+    return toBookmark(await this.request('POST', `/bookmarks/${bookmarkId}`, body));
   }
 
   /**

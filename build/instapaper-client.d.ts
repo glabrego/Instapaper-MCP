@@ -105,8 +105,17 @@ export declare class InstapaperClient {
         description?: string;
         folder_id?: number;
         resolve_final_url?: boolean;
+        tags?: string[];
+        archived?: boolean;
         content?: string;
         is_private_from_source?: string;
+    }): Promise<Bookmark>;
+    /**
+     * Edit a bookmark's title and/or description
+     */
+    updateBookmark(bookmarkId: number, changes: {
+        title?: string;
+        description?: string;
     }): Promise<Bookmark>;
     /**
      * Delete a bookmark
