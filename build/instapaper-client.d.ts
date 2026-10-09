@@ -30,6 +30,11 @@ interface Folder {
     position: number;
     count: number;
 }
+interface Tag {
+    tag_id: number;
+    name: string;
+    count: number;
+}
 interface Highlight {
     highlight_id: number;
     bookmark_id: number;
@@ -53,9 +58,11 @@ export declare class InstapaperClient {
     /**
      * List bookmarks with optional filters.
      * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
+     * tag: a tag name; takes precedence over folder
      */
     listBookmarks(options?: {
         folder?: string;
+        tag?: string;
         limit?: number;
         have?: string;
     }): Promise<Bookmark[]>;
@@ -144,6 +151,30 @@ export declare class InstapaperClient {
      * Delete a highlight
      */
     deleteHighlight(highlightId: number): Promise<void>;
+    /**
+     * List all tags
+     */
+    listTags(): Promise<Tag[]>;
+    /**
+     * Create a tag
+     */
+    createTag(name: string): Promise<Tag>;
+    /**
+     * Rename a tag (the API has no endpoint for deleting tags)
+     */
+    renameTag(tagId: number, name: string): Promise<Tag>;
+    /**
+     * Add and/or remove tags on a bookmark, by tag name.
+     * Names to add that don't exist yet are created. Names to remove are
+     * matched case-insensitively; unknown ones are ignored. Pass knownTags
+     * (from listTags) to avoid refetching them for every bookmark.
+     */
+    updateBookmarkTags(bookmarkId: number, options: {
+        add?: string[];
+        remove?: string[];
+    }, knownTags?: Tag[]): Promise<{
+        tags: string[];
+    }>;
     private moveToSection;
     /**
      * Make an authenticated request to the Instapaper API

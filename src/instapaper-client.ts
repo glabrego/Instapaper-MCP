@@ -36,6 +36,12 @@ interface Folder {
   count: number;
 }
 
+interface Tag {
+  tag_id: number;
+  name: string;
+  count: number;
+}
+
 interface Highlight {
   highlight_id: number;
   bookmark_id: number;
@@ -75,15 +81,20 @@ export class InstapaperClient {
   /**
    * List bookmarks with optional filters.
    * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
+   * tag: a tag name; takes precedence over folder
    */
   async listBookmarks(options: {
     folder?: string;
+    tag?: string;
     limit?: number;
     have?: string;
   } = {}): Promise<Bookmark[]> {
     const query: Record<string, string> = {};
     const folder = options.folder;
-    if (!folder || folder === 'unread' || folder === 'home') {
+    if (options.tag) {
+      query.section = 'tag';
+      query.tag = options.tag;
+    } else if (!folder || folder === 'unread' || folder === 'home') {
       query.section = 'home';
     } else if (folder === 'archive') {
       query.section = 'archive';
@@ -272,6 +283,60 @@ export class InstapaperClient {
     await this.request('DELETE', `/highlights/${highlightId}`);
   }
 
+  /**
+   * List all tags
+   */
+  async listTags(): Promise<Tag[]> {
+    const response = await this.request('GET', '/tags');
+    return response.tags.map(toTag);
+  }
+
+  /**
+   * Create a tag
+   */
+  async createTag(name: string): Promise<Tag> {
+    return toTag(await this.request('POST', '/tags', { name }));
+  }
+
+  /**
+   * Rename a tag (the API has no endpoint for deleting tags)
+   */
+  async renameTag(tagId: number, name: string): Promise<Tag> {
+    return toTag(await this.request('POST', `/tags/${tagId}`, { name }));
+  }
+
+  /**
+   * Add and/or remove tags on a bookmark, by tag name.
+   * Names to add that don't exist yet are created. Names to remove are
+   * matched case-insensitively; unknown ones are ignored. Pass knownTags
+   * (from listTags) to avoid refetching them for every bookmark.
+   */
+  async updateBookmarkTags(
+    bookmarkId: number,
+    options: { add?: string[]; remove?: string[] },
+    knownTags?: Tag[]
+  ): Promise<{ tags: string[] }> {
+    const body: Record<string, unknown> = {};
+    if (options.add?.length) {
+      body.add_tags = options.add.map((name) => ({ name }));
+    }
+    if (options.remove?.length) {
+      const tags = knownTags ?? (await this.listTags());
+      const byName = new Map(tags.map((t) => [t.name.trim().toLowerCase(), t.tag_id]));
+      const ids = options.remove
+        .map((name) => byName.get(name.trim().toLowerCase()))
+        .filter((id): id is number => id !== undefined);
+      if (ids.length) body.remove_tags = ids.map((id) => ({ id }));
+    }
+    if (!body.add_tags && !body.remove_tags) {
+      throw new Error('Nothing to change: provide add_tags and/or remove_tags with existing tag names');
+    }
+
+    // response.created_tags is not used: the API also lists tags that already existed there
+    const response = await this.request('POST', `/bookmarks/${bookmarkId}/tags`, body);
+    return { tags: response.tags.map((t: any) => t.name) };
+  }
+
   private async moveToSection(bookmarkId: number, section: string): Promise<Bookmark> {
     return toBookmark(await this.request('POST', `/bookmarks/${bookmarkId}/move`, { section }));
   }
@@ -340,6 +405,14 @@ function toFolder(f: any): Folder {
     title: f.title,
     position: f.position,
     count: f.count,
+  };
+}
+
+function toTag(t: any): Tag {
+  return {
+    tag_id: t.id,
+    name: t.name,
+    count: t.count,
   };
 }
 

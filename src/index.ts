@@ -61,6 +61,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'Folder to list from: "unread" (default), "archive", "starred", or a folder_id',
             },
+            tag: {
+              type: 'string',
+              description: 'Optional: list bookmarks carrying this tag name (across all sections). Overrides folder.',
+            },
             limit: {
               type: 'number',
               description: 'Maximum number of bookmarks to return (1-500, default 25)',
@@ -454,6 +458,97 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
 
+      // ========== TAG MANAGEMENT ==========
+      {
+        name: 'list_tags',
+        description: 'Retrieve all tags in your Instapaper account with how many bookmarks carry each one. Use this before tagging so you reuse existing tag names instead of creating near-duplicates.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
+      {
+        name: 'create_tag',
+        description: 'Create a new tag. Not required before tagging: tag_bookmark and tag_bookmarks_bulk create missing tags automatically.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: 'Name of the tag to create',
+            },
+          },
+          required: ['name'],
+        },
+      },
+      {
+        name: 'rename_tag',
+        description: 'Rename an existing tag, e.g. to fix a typo. Every bookmark carrying it keeps it. Fails if the new name is already taken. Note: the Instapaper API cannot delete tags; to merge two tags, use tag_bookmarks_bulk to add the target and remove the source, then delete the empty tag in the Instapaper app.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tag_id: {
+              type: 'number',
+              description: 'ID of the tag to rename (from list_tags)',
+            },
+            name: {
+              type: 'string',
+              description: 'New name for the tag',
+            },
+          },
+          required: ['tag_id', 'name'],
+        },
+      },
+      {
+        name: 'tag_bookmark',
+        description: 'Add and/or remove tags on a single bookmark, by tag name. Tags to add that do not exist yet are created. Returns the bookmark\'s full tag list afterwards.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            bookmark_id: {
+              type: 'number',
+              description: 'ID of the bookmark',
+            },
+            add_tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tag names to add',
+            },
+            remove_tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tag names to remove (case-insensitive; unknown names are ignored)',
+            },
+          },
+          required: ['bookmark_id'],
+        },
+      },
+      {
+        name: 'tag_bookmarks_bulk',
+        description: 'Add and/or remove the same tags on multiple bookmarks at once, by tag name. Use this to tag a batch of articles on one topic, or to merge one tag into another (add the target, remove the source).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            bookmark_ids: {
+              type: 'array',
+              items: { type: 'number' },
+              description: 'Array of bookmark IDs to update',
+            },
+            add_tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tag names to add',
+            },
+            remove_tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tag names to remove (case-insensitive; unknown names are ignored)',
+            },
+          },
+          required: ['bookmark_ids'],
+        },
+      },
+
       // ========== HIGHLIGHTS MANAGEMENT ==========
       {
         name: 'add_highlight',
@@ -540,6 +635,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'list_bookmarks': {
         const bookmarks = await client.listBookmarks({
           folder: typedArgs.folder as string | undefined,
+          tag: typedArgs.tag as string | undefined,
           limit: (typedArgs.limit as number) || 25,
           have: typedArgs.have as string | undefined,
         });
@@ -958,6 +1054,97 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: JSON.stringify({ success: true, folders }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'list_tags': {
+        const tags = await client.listTags();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ tags }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'create_tag': {
+        const tag = await client.createTag(typedArgs.name as string);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ success: true, tag }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'rename_tag': {
+        const tag = await client.renameTag(typedArgs.tag_id as number, typedArgs.name as string);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ success: true, tag }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'tag_bookmark': {
+        const result = await client.updateBookmarkTags(typedArgs.bookmark_id as number, {
+          add: typedArgs.add_tags as string[] | undefined,
+          remove: typedArgs.remove_tags as string[] | undefined,
+        });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ success: true, bookmark_id: typedArgs.bookmark_id, ...result }, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'tag_bookmarks_bulk': {
+        const bookmarkIds = typedArgs.bookmark_ids as number[];
+        const changes = {
+          add: typedArgs.add_tags as string[] | undefined,
+          remove: typedArgs.remove_tags as string[] | undefined,
+        };
+        const knownTags = changes.remove?.length ? await client.listTags() : undefined;
+        const results: Record<number, { tags: string[] } | { error: string }> = {};
+
+        // Sequential so a new tag is created once, not raced by parallel requests
+        for (const id of bookmarkIds) {
+          try {
+            const { tags } = await client.updateBookmarkTags(id, changes, knownTags);
+            results[id] = { tags };
+          } catch (error) {
+            results[id] = {
+              error: error instanceof Error ? error.message : 'Unknown error',
+            };
+          }
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  total: bookmarkIds.length,
+                  updated: Object.values(results).filter((r) => 'tags' in r).length,
+                  failed: Object.values(results).filter((r) => 'error' in r).length,
+                  results,
+                },
+                null,
+                2
+              ),
             },
           ],
         };

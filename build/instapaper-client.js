@@ -26,11 +26,16 @@ export class InstapaperClient {
     /**
      * List bookmarks with optional filters.
      * folder: "unread" (home), "archive", "starred" (liked), or a numeric folder_id
+     * tag: a tag name; takes precedence over folder
      */
     async listBookmarks(options = {}) {
         const query = {};
         const folder = options.folder;
-        if (!folder || folder === 'unread' || folder === 'home') {
+        if (options.tag) {
+            query.section = 'tag';
+            query.tag = options.tag;
+        }
+        else if (!folder || folder === 'unread' || folder === 'home') {
             query.section = 'home';
         }
         else if (folder === 'archive') {
@@ -185,6 +190,52 @@ export class InstapaperClient {
     async deleteHighlight(highlightId) {
         await this.request('DELETE', `/highlights/${highlightId}`);
     }
+    /**
+     * List all tags
+     */
+    async listTags() {
+        const response = await this.request('GET', '/tags');
+        return response.tags.map(toTag);
+    }
+    /**
+     * Create a tag
+     */
+    async createTag(name) {
+        return toTag(await this.request('POST', '/tags', { name }));
+    }
+    /**
+     * Rename a tag (the API has no endpoint for deleting tags)
+     */
+    async renameTag(tagId, name) {
+        return toTag(await this.request('POST', `/tags/${tagId}`, { name }));
+    }
+    /**
+     * Add and/or remove tags on a bookmark, by tag name.
+     * Names to add that don't exist yet are created. Names to remove are
+     * matched case-insensitively; unknown ones are ignored. Pass knownTags
+     * (from listTags) to avoid refetching them for every bookmark.
+     */
+    async updateBookmarkTags(bookmarkId, options, knownTags) {
+        const body = {};
+        if (options.add?.length) {
+            body.add_tags = options.add.map((name) => ({ name }));
+        }
+        if (options.remove?.length) {
+            const tags = knownTags ?? (await this.listTags());
+            const byName = new Map(tags.map((t) => [t.name.trim().toLowerCase(), t.tag_id]));
+            const ids = options.remove
+                .map((name) => byName.get(name.trim().toLowerCase()))
+                .filter((id) => id !== undefined);
+            if (ids.length)
+                body.remove_tags = ids.map((id) => ({ id }));
+        }
+        if (!body.add_tags && !body.remove_tags) {
+            throw new Error('Nothing to change: provide add_tags and/or remove_tags with existing tag names');
+        }
+        // response.created_tags is not used: the API also lists tags that already existed there
+        const response = await this.request('POST', `/bookmarks/${bookmarkId}/tags`, body);
+        return { tags: response.tags.map((t) => t.name) };
+    }
     async moveToSection(bookmarkId, section) {
         return toBookmark(await this.request('POST', `/bookmarks/${bookmarkId}/move`, { section }));
     }
@@ -244,6 +295,13 @@ function toFolder(f) {
         title: f.title,
         position: f.position,
         count: f.count,
+    };
+}
+function toTag(t) {
+    return {
+        tag_id: t.id,
+        name: t.name,
+        count: t.count,
     };
 }
 function toHighlight(h) {
